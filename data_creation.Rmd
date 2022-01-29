@@ -1,0 +1,303 @@
+---
+title: "Read & Format SU York data"
+author: "Kim Engie"
+date: "1/18/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(lubridate)
+library(vroom)
+```
+
+### Read in csvs, and make a data dictionary of release types
+
+```{r}
+basedir = "/Users/kimengie/Documents/Data/York/jail"
+cat(file=stderr(), "\nreading data...\n")
+
+inmates <- vroom(file.path(basedir, "yorkopenlattice_withbookingnumbers.csv"),
+                  col_names = c("first", "last", "status", "statusdate", "id", "pouch"))
+
+bookings <- vroom(file.path(basedir, "YCPInmateHistory2017.csv"))
+
+releasetype = tribble(~ReleaseType, ~Description,
+                      "BA","BY BAIL",
+                        "CO", "BY COURT'S ORDER (COURT OF RECORD AND MINOR JUDICIARY)",
+                        "DC", "SENTENCED TO THE DEPARTMENT OF CORRECTIONS",
+                        "DS", "BY DEATH",
+                        "EM", "BY EXPIRATION OF MAXIMUM",
+                        "FC", "BY PAYMENT OF FINES AND COSTS",
+                        "HA", "BY HOLDING AUTHORITY",                                                
+                        "OT", "OTHER",
+                        "PC", "PAROLED BY THE COURT OF RECORD",
+                        "PS", "PAROLED BY STATE BOARD OF PROBATION/PAROLE",
+                        "PT", "PERMANENT TRANSFER TO OTHER INSTITUTION",
+                        "VA",  "BY VARIOUS FEDERAL/STATE/POLICE AUTHORITIES)")
+```
+
+More csvs - from sftp folder
+```{r}
+# File list 
+allfiles <- list.files(path=basedir, pattern="yorkcounty_\\d+.csv", full.names=TRUE, recursive=FALSE)
+
+for (i in allfiles){
+  name = str_split(i, "/")  %>% tail() %>% pluck(1,9) %>% str_remove(".csv")
+  assign(name, vroom(i, col_types = cols(.default = "c")))
+}
+
+# test = "/Users/kimengie/Documents/Data/York/jail//yorkcounty_202201031600.csv"
+# str_split(test, "/") %>% tail() %>% pluck(1,9) %>% str_remove(".csv") %>% str_replace("\"", "")
+```
+
+Stack the recent csvs as they're all the same format, which is the same format as the bookings table
+```{r}
+sftp_bookings <- rbind(yorkcounty_202111021124, 
+                     yorkcounty_202111230945,
+                     yorkcounty_202111231000, 
+                     yorkcounty_202111231015,
+                     yorkcounty_202111231030,
+                     yorkcounty_202111231045,
+                     yorkcounty_202111231100,
+                     	yorkcounty_202112101115,
+                     yorkcounty_202112101130,
+                     yorkcounty_202112101145,
+                     yorkcounty_202112141030,
+                     yorkcounty_202112141045,
+                     yorkcounty_202112141100,
+                     yorkcounty_202112141115,
+                     yorkcounty_202112141130,
+                     yorkcounty_202112141145,
+                     yorkcounty_202112141200,
+                     yorkcounty_202112141215,
+                     	yorkcounty_202112141230,
+                     yorkcounty_202112291145,
+                     yorkcounty_202112291200,
+                     yorkcounty_202112291215,
+                     yorkcounty_202112291230,
+                     	yorkcounty_202112291245,
+                     yorkcounty_202112291300,
+                     yorkcounty_202112291315,
+                     yorkcounty_202112291330,
+                     yorkcounty_202201031600,
+                     yorkcounty_202201101000,
+                     yorkcounty_202201101015,
+                     yorkcounty_202201101030,
+                     	yorkcounty_202201101045,
+                     yorkcounty_202201101100,
+                     	yorkcounty_202201101115,
+                     	yorkcounty_202201101130,
+                     yorkcounty_202201101145,
+                     yorkcounty_202201101200,
+                     yorkcounty_202201101215,
+                     yorkcounty_202201101230,
+                     yorkcounty_202201101245,
+                     yorkcounty_202201101300,
+                     	yorkcounty_202201101315,
+                     	yorkcounty_202201101330,
+                     yorkcounty_202201101345,
+                     yorkcounty_202201101400,
+                     yorkcounty_202201101415,
+                     	yorkcounty_202201141200,
+                     	yorkcounty_202201191045) %>%
+  select(-c(index, TimeServedDays,ReasonCode)) %>% # empty or irrelevant columns
+  mutate(personID = sapply(strsplit(GeneralIdentifier, ":", fixed=TRUE), head, 1),
+         personID = str_trim(personID, side = "both")) %>%
+  mutate(CommitDateTime = parse_date_time(CommitDateTime, '%m/%d/%Y %I:%M:%S %p',
+                                          tz = "America/New_York"),
+         StartDateTime = parse_date_time(StartDateTime, '%m/%d/%Y %I:%M:%S %p', 
+                                         tz = "America/New_York"),
+         ProjectedReleaseDateTime = parse_date_time(ProjectedReleaseDateTime, 
+                                                    '%m/%d/%Y %I:%M:%S %p', 
+                                                    tz = "America/New_York"),
+         DateTimeRelease = parse_date_time(DateTimeRelease, 
+                                                    '%m/%d/%Y %I:%M:%S %p', 
+                                                    tz = "America/New_York"))
+  
+```
+
+
+Add personID to historical bookings table.
+```{r}
+bookings_clean <- bookings %>%
+  select(-c(index, TimeServedDays,ReasonCode)) %>% # empty or irrelevant columns
+  mutate(personID = sapply(strsplit(GeneralIdentifier, ":", fixed=TRUE), head, 1),
+         personID = str_trim(personID, side = "both"))
+         
+```
+
+
+```{r}
+allbookings <- rbind(bookings_clean, sftp_bookings)
+allbookings <- distinct(allbookings, across())
+  
+```
+
+### Combine MH status & bookings
+"The MHSR rating is not assigned to a booking, but rather the patient themselves. So there is no direct relation between a rating and a booking. If a patient comes in on January 5th and gets an A rating, is released on January 8th, they will maintain that rating the next time they are booked in. Unfortunately, due to this, there is no direct correlation between a booking number and a rating, there is only a rating assigned to the patient and the date it was assigned. This is all independent of the booking itself."
+
+* assume the dates of patient rating and booking start/end are always accurate and a person's rating never gets lost
+* Interweave & order the dates of bookings & MH ratings per individual.
+* If a rating date occurs during a booking (must be between commit & release, inclusive), match it.
+* assign each booking after it a rating based on the "statusdate" that is either within it, or the latest prior.
+```{r}
+# combine all dates in 1 tibble
+ratingdates <- inmates %>% arrange(statusdate) %>% 
+  select(pouch, statusdate) %>% 
+  mutate(pouch = as.character(pouch),
+         statusdate = as.character(statusdate))
+
+
+booking_ranges <- allbookings %>% 
+  arrange(CommitDateTime) %>%
+  left_join(ratingdates, by = c("personID"="pouch")) %>%
+# This would keep only what's in the group-by, an add a list-col
+  group_by(personID, GeneralIdentifier, CommitDateTime, DateTimeRelease, ReleaseType, ProjectedReleaseDateTime) %>%
+  summarize(statusdates = list(statusdate)) %>%
+  ungroup()
+  
+  #keeps whole table, adds a list-col
+  #   rowwise() %>%
+  # mutate(statusdates = list(as.Date(statusdate))) %>%
+  # ungroup()
+  
+# This would keep the whole table but add a list col that's a TIBBLE
+# nest(statusdates = c(statusdate))
+```
+
+#### Helper function, to match the date somepone was assigned a MHSR rating, to the booking it applies to.
+Cannot use `case_when` for the `matchdate`. When `in_booking` is empty: "case_when returns a vector with a length equal to the length of the vector you pass in. So nothing in, nothing out."
+Cannot use dplyr if_else, it does not evaluate `character(0)` or `logical(0)` well for T/F
+```{r}
+rating_to_booking <- function(allratings, start=CommitDateTime, end=DateTimeRelease) {  
+  end <- if_else(!is.na(end), end, Sys.time()) #if the relase date is null, compare to today's date.
+  
+  if (!is.na(allratings)) {
+    # Check if there's a statusdate during a booking. If so, return it.
+  check_in_booking <- between(as.Date(allratings),start,end)
+  allratings <-  as.character(allratings)
+  
+  in_booking <- case_when(
+    all(check_in_booking==FALSE) ~ NA_character_,
+     TRUE ~ allratings[check_in_booking] %>% as.character()  
+  )
+    
+  # Use the `in_booking` statusdate within the jail booking if exists
+  # Or if all statusdates are after the booking ends, there are none
+  # Or, get most recent statusdate before the start
+  matchdate <- ifelse(length(in_booking) > 0,
+                       in_booking, 
+                       ifelse(all(as.Date(allratings) < as.Date(end)),
+                               allratings[max(rev(order(allratings)))] %>% as.character(), # the max date
+                               NA_character_ )
+                       )
+  return (matchdate)
+  }
+  
+  return (NA_character_) # if no rating, return NA
+}
+```
+
+
+<!-- TESTING GROUNDS -->
+<!-- ```{r} -->
+<!-- # ratingdates = test_ratingdates$statusdate -->
+<!-- test =  -->
+<!--   booking_ranges2$statusdates[[1]] -->
+
+<!-- start = booking_ranges2$CommitDateTime -->
+<!-- end =  booking_ranges2$DateTimeRelease -->
+
+<!-- # if_else(between(testdate, as.Date(start), as.Date(end)), testdate, NA_Date_) -->
+<!-- # all(test_ratingdates$statusdate > as.Date(end)) -->
+<!-- # between(test_ratingdates$statusdate, as.Date(start), as.Date(end)) -->
+
+<!-- rating_to_booking(allratings = test, -->
+<!--                   start = start, -->
+<!--                   end = end) -->
+
+<!-- ``` -->
+
+Match MHSR ratings to bookings
+```{r}
+booking_ranges2 <- booking_ranges %>%
+  rowwise() %>%
+  mutate(statusdate_match = pmap(list(statusdates[[1]], CommitDateTime, DateTimeRelease),
+                                 rating_to_booking)) %>%
+  unnest(cols = statusdate_match)
+# booking_ranges2$statusdate_match
+```
+
+```{r}
+alljail_data <- booking_ranges2 %>%
+  # join all person names (some won't have statuses)
+  left_join(inmates %>% select(pouch, first, last) %>% mutate(pouch = as.character(pouch)),
+            by = c("personID"="pouch"),
+            na_matches = "never") %>%
+  distinct(.) %>% # clear out duplicates, not sure why created
+  # join only those statuses that match
+  left_join(inmates %>% select(pouch, statusdate, status, id) %>%
+              mutate(pouch = as.character(pouch),
+         statusdate = as.character(statusdate)), 
+            by = c("personID"="pouch", "statusdate_match"="statusdate"),
+         na_matches = "never") %>%
+  distinct(.) %>% # clear out duplicates, not sure why created
+  relocate(statusdates, .after = last_col())
+```
+
+### Finish cleaning up bookings table.
+* Parse out in their own columns: personID, year booked, timeserved (days)
+* Using the *CommitDateTime* and not the StartDateTime to mark the start of the "time served" range.
+* If not yet released, calciulate time served until the current date.
+```{r}
+alljail_data2 <- alljail_data %>%
+  mutate(yr_booked_num = year(CommitDateTime),
+         yr_booked = as.character(yr_booked_num), #need a text col for listing the "Total" in dropdowns
+         ol_timeserveddays = round(if_else(!is.na(DateTimeRelease),
+                                           difftime(DateTimeRelease, CommitDateTime, units = "days"),
+                                           difftime(Sys.Date(), CommitDateTime, units = "days")),
+                                   0),
+         statusdates = sapply(statusdates, toString)
+         ) %>%
+  left_join(releasetype, by="ReleaseType") %>%
+  relocate(Description, .after = ReleaseType) %>%
+  relocate(c(yr_booked_num, yr_booked, ol_timeserveddays), .after = CommitDateTime) %>%
+  relocate(statusdates, .after = last_col())
+
+```
+
+### CALCULATE RECIDIVISM - with 365 day lookback
+Data. https://stackoverflow.com/questions/66254603/using-datetime-lookback-periods-to-record-whether-event-occured-in-r
+```{r}
+# Helper function
+previous_booking <- function(person, start, end, data=alljail_data2){
+# for each commit, look back 365 days for another commit in that time.
+  commits <- data %>% filter(personID==person) %>%
+    pull(CommitDateTime)
+  
+  if_else(commits >= start & commits < end, 1, 0) %>%
+    sum() -> flag_count
+  
+  ifelse(flag_count > 0, 1, 0)
+}
+
+alljail_withrecidivism <-  alljail_data2 %>%
+  select(personID, CommitDateTime, yr_booked, GeneralIdentifier, status, everything()) %>%
+  distinct(personID, CommitDateTime, GeneralIdentifier, status, .keep_all = TRUE) %>%
+  arrange(personID, CommitDateTime) %>%
+  mutate(
+    lookbacktime = (CommitDateTime - years(1)), 
+    lookbackflag = pmap_dbl(list(personID, lookbacktime, CommitDateTime), previous_booking)
+  )
+```
+
+
+save csv into the `data` folder. 
+```{r}
+write_csv(alljail_withrecidivism, "data/york_jaildata_combined.csv" )
+```
+
+

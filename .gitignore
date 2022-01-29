@@ -1,3 +1,6 @@
+# Data folder with cleaned csv
+/data/
+
 # History files
 .Rhistory
 .Rapp.history
@@ -16,6 +19,9 @@
 
 # Output files from R CMD check
 /*.Rcheck/
+
+# Output files form RrStudio Connect
+/rsconnect/
 
 # RStudio files
 .Rproj.user/
